@@ -4,8 +4,9 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
-	"os"
 	"time"
 
 	"github.com/jackc/pgmock"
@@ -22,7 +23,10 @@ func (s *Snap) getScript() (*pgmock.Script, error) {
 		return nil, err
 	}
 
-	script := s.readScript(f)
+	script, err := s.readScript(f)
+	if err != nil {
+		return nil, err
+	}
 	if len(script.Steps) < len(pgmock.AcceptUnauthenticatedConnRequestSteps())+1 {
 		return script, EmptyScript
 	}
@@ -94,7 +98,7 @@ func (s *Snap) sendError(be *pgproto3.Backend, err error) {
 	be.Send(&pgproto3.ReadyForQuery{'I'})
 }
 
-func (s *Snap) readScript(f *os.File) *pgmock.Script {
+func (s *Snap) readScript(f io.Reader) (*pgmock.Script, error) {
 	script := &pgmock.Script{
 		Steps: pgmock.AcceptUnauthenticatedConnRequestSteps(),
 	}
@@ -110,18 +114,24 @@ func (s *Snap) readScript(f *os.File) *pgmock.Script {
 
 		switch b[0] {
 		case 'B':
-			msg := s.unmarshalB(b[1:])
+			msg, err := s.unmarshalB(b[1:])
+			if err != nil {
+				return nil, err
+			}
 			script.Steps = append(script.Steps, pgmock.SendMessage(msg))
 		case 'F':
-			msg := s.unmarshalF(b[1:])
+			msg, err := s.unmarshalF(b[1:])
+			if err != nil {
+				return nil, err
+			}
 			script.Steps = append(script.Steps, pgmock.ExpectMessage(msg))
 		}
 	}
 
-	return script
+	return script, nil
 }
 
-func (s *Snap) unmarshalB(src []byte) pgproto3.BackendMessage {
+func (s *Snap) unmarshalB(src []byte) (pgproto3.BackendMessage, error) {
 	t := struct {
 		Type string
 	}{}
@@ -154,15 +164,17 @@ func (s *Snap) unmarshalB(src []byte) pgproto3.BackendMessage {
 	case "NoData":
 		o = &pgproto3.NoData{}
 	default:
-		panic("unknown type: " + t.Type)
+		return nil, fmt.Errorf("B: unknown type `%s`", t.Type)
 	}
 
-	_ = json.Unmarshal(src, o)
+	if err := json.Unmarshal(src, o); err != nil {
+		return nil, err
+	}
 
-	return o
+	return o, nil
 }
 
-func (s *Snap) unmarshalF(src []byte) pgproto3.FrontendMessage {
+func (s *Snap) unmarshalF(src []byte) (pgproto3.FrontendMessage, error) {
 	t := struct {
 		Type string
 	}{}
@@ -186,11 +198,13 @@ func (s *Snap) unmarshalF(src []byte) pgproto3.FrontendMessage {
 		o = &pgproto3.Bind{}
 	case "Execute":
 		o = &pgproto3.Execute{}
+	case "Terminate":
+		o = &pgproto3.Terminate{}
 	default:
-		panic("unknown type: " + t.Type)
+		return nil, fmt.Errorf("F: unknown type `%s`", t.Type)
 	}
 
 	_ = json.Unmarshal(src, o)
 
-	return o
+	return o, nil
 }
