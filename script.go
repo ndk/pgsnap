@@ -163,6 +163,8 @@ func (s *Snap) unmarshalB(src []byte) (pgproto3.BackendMessage, error) {
 		o = &pgproto3.EmptyQueryResponse{}
 	case "NoData":
 		o = &pgproto3.NoData{}
+	case "ErrorResponse":
+		o = &pgproto3.ErrorResponse{}
 	default:
 		return nil, fmt.Errorf("B: unknown type `%s`", t.Type)
 	}
